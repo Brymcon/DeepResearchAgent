@@ -49,6 +49,7 @@ The agent can operate in two primary modes:
     ```bash
     pip install -r requirements.txt
     ```
+    This will install all necessary packages, including those for the PDF Vision Assistant.
 
 4.  **Set Up Environment Variables**:
     The agent requires API credentials for the language model. Create a `.env` file in the project root or set system environment variables:
@@ -180,3 +181,62 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 The `generate_website` function requires the markdown content as a string and the desired output path for the HTML file. For the AI-powered generation of planning comments in the HTML head, ensure the `DEEPSEEK_API_KEY` and `DEEPSEEK_BASE_URL` environment variables are set. If these are not available, the generator will fall back to default comments and continue.
+
+## PDF Vision Assistant
+
+The `PDFVisionAssistant` is a tool designed to extract text from PDF files. It utilizes PaddleOCR for optical character recognition, which allows it to process scanned documents or PDFs where text is embedded as images.
+
+### Installation
+
+The necessary Python packages for the PDF Vision Assistant are listed in `requirements.txt`. You can install them using:
+```bash
+pip install -r requirements.txt
+```
+**Note:** On its first run for a specific language, PaddleOCR will automatically download the required OCR and detection models. This means an internet connection will be necessary at that point. Subsequent runs for the same language will use the cached models.
+
+### Usage Example
+
+Here's how you can use the `extract_text_from_pdf_wrapper` function to get text from a PDF:
+
+```python
+from pdf_vision_assistant import extract_text_from_pdf_wrapper
+import os
+
+# Create a dummy PDF for testing if you don't have one.
+# For a real scenario, you would provide a path to an existing PDF.
+# Note: PyMuPDF is needed to create this dummy PDF.
+# Ensure you have it installed (it's in requirements.txt).
+try:
+    import fitz # PyMuPDF
+    if not os.path.exists("sample.pdf"):
+        doc = fitz.open() # New empty PDF
+        page = doc.new_page()
+        page.insert_text((50, 72), "Hello, this is a test PDF for PaddleOCR.")
+        page.insert_text((50, 92), "It contains some sample text on one page.")
+        doc.save("sample.pdf")
+        doc.close()
+        print("Created a dummy 'sample.pdf' for the example.")
+except ImportError:
+    print("PyMuPDF (fitz) is not installed. Cannot create a dummy PDF for the example. Please provide your own PDF.")
+except Exception as e:
+    print(f"Error creating dummy PDF: {e}. Please provide your own PDF.")
+
+
+pdf_file_path = "sample.pdf" # Replace with your PDF file path
+
+if os.path.exists(pdf_file_path):
+    print(f"\nAttempting to extract text from: {pdf_file_path}")
+    # Set lang to 'ch' for Chinese, 'en' for English, etc.
+    # Check PaddleOCR documentation for supported languages.
+    # use_gpu=True can be passed if you have a compatible GPU and paddlepaddle-gpu installed.
+    extracted_text = extract_text_from_pdf_wrapper(pdf_file_path, lang='en')
+
+    print("\n--- Extracted Text ---")
+    print(extracted_text)
+    print("--- End of Text ---")
+else:
+    print(f"PDF file '{pdf_file_path}' not found. Please create it or provide a valid path.")
+
+```
+This wrapper function initializes the `PDFVisionAssistant`, processes the PDF page by page (converting them to images first), and then uses PaddleOCR to extract text from these images. It concatenates the text from all pages. You can specify the language for OCR (e.g., 'en' for English, 'ch' for Chinese).
+The `use_gpu` parameter can be set to `True` if you have a compatible GPU setup and the GPU-enabled version of PaddlePaddle installed, which can significantly speed up processing for large documents.

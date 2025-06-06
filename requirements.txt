@@ -3,3 +3,4 @@ paddlepaddle
 PyMuPDF
 numpy
 opencv-python
+paramiko

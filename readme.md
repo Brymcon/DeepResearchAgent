@@ -49,7 +49,7 @@ The agent can operate in two primary modes:
     ```bash
     pip install -r requirements.txt
     ```
-    This will install all necessary packages, including those for the PDF Vision Assistant (`paddleocr`, `paddlepaddle`, `PyMuPDF`, `numpy`, `opencv-python`).
+    This will install all necessary packages, including those for the PDF Vision Assistant (`paddleocr`, `paddlepaddle`, `PyMuPDF`, `numpy`, `opencv-python`) and File Shuttle Utilities (`paramiko`).
 
 4.  **Set Up Environment Variables**:
     The agent requires API credentials for the language model. Create a `.env` file in the project root or set system environment variables:
@@ -290,3 +290,140 @@ else:
 ```
 This function first analyzes the PDF's layout using `PPStructure` to identify elements like text blocks, tables, titles, etc. It then reconstructs the text content based on this structure, aiming for a more readable and logically ordered output.
 The `use_gpu` parameter can be set to `True` in both wrappers if you have a compatible GPU setup and the GPU-enabled version of PaddlePaddle installed, which can significantly speed up processing.
+
+## File Shuttle Utilities
+
+The `FileShuttle` class in `file_shuttle_utils.py` provides a convenient way to perform various file system operations, both locally and remotely via SCP (Secure Copy Protocol).
+
+### Description
+`FileShuttle` encapsulates common tasks such as creating directories, checking for path existence, listing directory contents, copying, moving, and deleting files/directories. For remote operations, it supports SCP uploads and downloads for both individual files and entire directories, using the `paramiko` library.
+
+### Installation
+All necessary Python libraries for local operations are part of the standard library. For SCP remote operations, `paramiko` is required. It is included in the `requirements.txt` file:
+```bash
+pip install -r requirements.txt
+```
+
+### Usage
+
+First, instantiate the `FileShuttle`:
+```python
+from file_shuttle_utils import FileShuttle
+import os # For os.path.join in example
+import shutil # For rmtree in example cleanup
+
+shuttle = FileShuttle()
+```
+
+#### Local File Operations Example
+```python
+# Local Operations
+source_file = "my_document.txt"
+destination_dir = "backup_docs"
+# Using pathlib for robust path joining is also a good alternative to os.path.join
+copied_file_path = os.path.join(destination_dir, source_file)
+
+# Create dummy source file for example
+with open(source_file, "w") as f:
+    f.write("This is a test document.")
+
+if shuttle.create_directory(destination_dir, exist_ok=True):
+    print(f"Directory '{destination_dir}' created or already exists.")
+
+# Example: Copy file into a directory
+if shuttle.local_copy(source_file, destination_dir):
+    print(f"Copied '{source_file}' to '{destination_dir}'. Effective path: '{copied_file_path}'")
+    if shuttle.local_exists(copied_file_path):
+        print(f"Verified '{copied_file_path}' exists.")
+
+print(f"Contents of '{destination_dir}': {shuttle.local_list(destination_dir)}")
+
+# Clean up dummy files and directory
+if shuttle.local_delete(source_file):
+    print(f"Deleted original source file '{source_file}'.")
+if shuttle.local_delete(destination_dir): # Deletes the directory and its contents
+    print(f"Deleted directory '{destination_dir}'.")
+```
+
+#### SCP File Upload Example (Key-based)
+For SCP operations, you'll need SSH access to the remote server. Key-based authentication is strongly recommended over password-based authentication for better security. Ensure your public key is in the remote server's `~/.ssh/authorized_keys` file.
+
+```python
+# SCP Upload (Key-based authentication recommended)
+# Ensure "local_file_to_upload.txt" exists locally.
+local_upload_file = "local_file_to_upload.txt"
+with open(local_upload_file, "w") as f:
+    f.write("SCP test file content.")
+
+# --- IMPORTANT: Replace placeholders below with your actual server details ---
+REMOTE_HOSTNAME = "your_server_hostname_or_ip"
+REMOTE_USERNAME = "your_ssh_username"
+REMOTE_FILE_PATH = "/remote/path/on/server/uploaded_file.txt" # Adjust remote path
+# Path to your private SSH key (e.g., ~/.ssh/id_rsa, ~/.ssh/my_key)
+# Ensure this key is NOT password-protected if using without password prompt,
+# or use an SSH agent. Paramiko does not directly support password-protected keys
+# without custom handling or an agent.
+SSH_KEY_FILEPATH = "~/.ssh/id_rsa"
+# SSH_PASSWORD = "your_ssh_password" # Alternatively, use password (less secure)
+SSH_PORT = 22 # Default SSH port, change if your server uses a different one
+
+success_upload = shuttle.scp_upload_file(
+    local_path_str=local_upload_file,
+    remote_path_str=REMOTE_FILE_PATH,
+    hostname=REMOTE_HOSTNAME,
+    username=REMOTE_USERNAME,
+    key_filepath=SSH_KEY_FILEPATH
+    # password=SSH_PASSWORD, # Uncomment if using password
+    # port=SSH_PORT
+)
+
+if success_upload:
+    print(f"File '{local_upload_file}' uploaded successfully to '{REMOTE_HOSTNAME}:{REMOTE_FILE_PATH}'.")
+else:
+    print("SCP file upload failed. Check logs for details.")
+
+if os.path.exists(local_upload_file): # Clean up dummy file
+    os.remove(local_upload_file)
+```
+**Parameters for SCP methods:**
+*   `local_path_str`, `local_dir_str`: Path to the local file or directory.
+*   `remote_path_str`, `remote_dir_str`: Path to the remote file or directory on the server.
+*   `hostname`: The hostname or IP address of the SSH server.
+*   `username`: Your SSH username for the server.
+*   `password`: Your SSH password (use with caution; key-based auth is preferred).
+*   `key_filepath`: Path to your private SSH key file (e.g., `~/.ssh/id_rsa`).
+*   `port`: The SSH port on the server (defaults to 22).
+
+#### SCP Directory Download Example
+```python
+# SCP Download Directory
+local_download_container = "downloaded_remote_content"
+# Ensure local container directory exists
+shuttle.create_directory(local_download_container, exist_ok=True)
+
+# --- IMPORTANT: Replace placeholders below with your actual server details ---
+REMOTE_DIR_TO_DOWNLOAD = "/path/to/remote_directory_to_download" # Adjust remote path
+
+success_download_dir = shuttle.scp_download_directory(
+    remote_dir_str=REMOTE_DIR_TO_DOWNLOAD,
+    local_dir_str=local_download_container, # The remote dir will be placed inside this local dir
+    hostname=REMOTE_HOSTNAME, # Defined in previous example
+    username=REMOTE_USERNAME, # Defined in previous example
+    key_filepath=SSH_KEY_FILEPATH # Defined in previous example
+    # port=SSH_PORT
+)
+
+if success_download_dir:
+    downloaded_dir_name = os.path.basename(REMOTE_DIR_TO_DOWNLOAD.rstrip('/'))
+    final_local_path = os.path.join(local_download_container, downloaded_dir_name)
+    print(f"Directory '{REMOTE_DIR_TO_DOWNLOAD}' downloaded successfully into '{local_download_container}'.")
+    print(f"Contents of '{final_local_path}': {shuttle.local_list(final_local_path)}")
+else:
+    print("SCP directory download failed. Check logs for details.")
+
+# Optional: clean up the downloaded directory
+# if os.path.exists(local_download_container):
+#     shutil.rmtree(local_download_container)
+```
+**Security Note:** Always handle your SSH credentials (passwords and private keys) securely. Avoid hardcoding them directly in scripts for production use. Consider using environment variables, configuration files with restricted permissions, or SSH agents for managing keys. Key-based authentication is generally more secure than password-based authentication.
+The `FileShuttle` class provides comprehensive logging, so check your application logs if you encounter issues with file operations.

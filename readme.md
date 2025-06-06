@@ -136,3 +136,47 @@ Contributions are welcome! If you'd like to contribute, please consider:
 ## License
 
 MIT or Apache 2.0
+
+## Website Generator
+
+The `WebsiteGenerator` class transforms a markdown research report into an interactive single-page HTML application. It parses the markdown, generates AI-assisted planning comments for the HTML structure, and then constructs the HTML, CSS, and JavaScript to render the report.
+
+To use it, you can import and call the `generate_website` asynchronous function from the `website_generator` module.
+
+Example usage:
+```python
+import asyncio
+from website_generator import generate_website
+
+async def main():
+    sample_markdown_content = """
+# My Research Paper
+
+## Table of Contents
+- [Section 1](#section-1)
+- [Section 2](#section-2)
+
+<a id="section-1"></a>
+## Section 1
+This is the first section. It has a reference [1].
+
+<a id="section-2"></a>
+## Section 2
+This is the second section.
+
+# References
+1. Example Reference - <https://example.com>
+"""
+    output_html_file = "my_report.html"
+
+    # Ensure DEEPSEEK_API_KEY and DEEPSEEK_BASE_URL are set as environment variables
+    # if you want AI placeholders to be generated for the HTML head comments.
+    # If not set, the generator will use default placeholders and log a warning.
+
+    await generate_website(sample_markdown_content, output_html_file)
+    print(f"Website generated at {output_html_file}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+The `generate_website` function requires the markdown content as a string and the desired output path for the HTML file. For the AI-powered generation of planning comments in the HTML head, ensure the `DEEPSEEK_API_KEY` and `DEEPSEEK_BASE_URL` environment variables are set. If these are not available, the generator will fall back to default comments and continue.

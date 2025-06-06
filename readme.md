@@ -49,6 +49,7 @@ The agent can operate in two primary modes:
     ```bash
     pip install -r requirements.txt
     ```
+    This will install all necessary packages, including those for the PDF Vision Assistant (`paddleocr`, `paddlepaddle`, `PyMuPDF`, `numpy`, `opencv-python`).
 
 4.  **Set Up Environment Variables**:
     The agent requires API credentials for the language model. Create a `.env` file in the project root or set system environment variables:
@@ -180,3 +181,112 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 The `generate_website` function requires the markdown content as a string and the desired output path for the HTML file. For the AI-powered generation of planning comments in the HTML head, ensure the `DEEPSEEK_API_KEY` and `DEEPSEEK_BASE_URL` environment variables are set. If these are not available, the generator will fall back to default comments and continue.
+
+## PDF Vision Assistant
+
+The `PDFVisionAssistant` is a tool designed to extract text and analyze layout from PDF files. It utilizes PaddleOCR for optical character recognition, allowing it to process scanned documents or PDFs where text is embedded as images. Furthermore, it uses `PPStructure` (also part of the PaddleOCR ecosystem) to analyze the document layout, identifying elements like titles, text blocks, tables, and figures. This enables a more structured extraction of text content, attempting to preserve a logical reading order.
+
+### Installation
+
+The necessary Python packages for the PDF Vision Assistant are listed in `requirements.txt`. You can install them using:
+```bash
+pip install -r requirements.txt
+```
+This command installs `PyMuPDF` (for PDF handling), `paddleocr` (for OCR and structure analysis), `paddlepaddle` (the deep learning framework), `numpy`, and `opencv-python` (for image processing).
+
+**Note:** On its first run for a specific language, PaddleOCR and PPStructure will automatically download the required OCR, detection, and layout analysis models. This means an internet connection will be necessary at that point. Subsequent runs for the same language will use the cached models.
+
+### Usage Examples
+
+#### 1. Basic Text Extraction
+
+This example uses the `extract_text_from_pdf_wrapper` function to get raw text from all pages of a PDF.
+
+```python
+from pdf_vision_assistant import extract_text_from_pdf_wrapper
+import os
+
+# Create a dummy PDF for testing if you don't have one.
+# For a real scenario, you would provide a path to an existing PDF.
+try:
+    import fitz # PyMuPDF
+    if not os.path.exists("sample_basic.pdf"): # Use a different name for clarity
+        doc = fitz.open() # New empty PDF
+        page = doc.new_page()
+        page.insert_text((50, 72), "Hello, this is a test PDF for PaddleOCR.")
+        page.insert_text((50, 92), "It contains some sample text on one page.")
+        doc.save("sample_basic.pdf")
+        doc.close()
+        print("Created a dummy 'sample_basic.pdf' for the basic extraction example.")
+except ImportError:
+    print("PyMuPDF (fitz) is not installed. Cannot create a dummy PDF. Please provide your own PDF.")
+except Exception as e:
+    print(f"Error creating dummy PDF: {e}. Please provide your own PDF.")
+
+
+pdf_file_path_basic = "sample_basic.pdf" # Replace with your PDF file path
+
+if os.path.exists(pdf_file_path_basic):
+    print(f"\nAttempting to extract basic text from: {pdf_file_path_basic}")
+    # Set lang to 'ch' for Chinese, 'en' for English, etc.
+    # Check PaddleOCR documentation for supported languages.
+    extracted_text = extract_text_from_pdf_wrapper(pdf_file_path_basic, lang='en')
+
+    print("\n--- Extracted Basic Text ---")
+    print(extracted_text)
+    print("--- End of Basic Text ---")
+else:
+    print(f"PDF file '{pdf_file_path_basic}' not found. Please create it or provide a valid path.")
+
+```
+This wrapper function processes the PDF page by page, converting them to images first, and then uses PaddleOCR to extract text. It's suitable for getting all textual content without detailed structure.
+
+#### 2. Structured Text Extraction (Layout-Aware)
+
+This example uses the `extract_structured_text_from_pdf_wrapper` function, which leverages layout analysis for a more organized text output.
+
+```python
+# (Assuming pdf_vision_assistant.py is in the same directory or installed)
+from pdf_vision_assistant import extract_structured_text_from_pdf_wrapper
+import os
+
+# (You can reuse or adapt the dummy PDF creation code from the previous example if needed)
+# Ensure a "sample_structured.pdf" exists or use your own PDF file.
+try:
+    import fitz
+    if not os.path.exists("sample_structured.pdf"): # Use a different name
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((50, 72), "Title of Document") # Mock title
+        page.insert_text((50, 102), "This is the first paragraph. It contains some general information and flows across the page.", (50,112))
+        page.insert_text((50, 132), "This is a second paragraph, possibly discussing further details. It might be longer.")
+        # Add a mock table-like structure
+        page.insert_text((50, 162), "Column1 Header | Column2 Header")
+        page.insert_text((50, 177), "Row1Data1      | Row1Data2")
+        page.insert_text((50, 192), "Row2Data1      | Row2Data2")
+        page.insert_text((50, 222), "Another text block after the table content.") # Text after table
+        doc.save("sample_structured.pdf")
+        doc.close()
+        print("Created/updated a dummy 'sample_structured.pdf' for the structured text example.")
+except ImportError:
+    print("PyMuPDF (fitz) is not installed. Cannot create/update dummy PDF.")
+except Exception as e:
+    print(f"Error creating/updating dummy PDF: {e}.")
+
+
+pdf_file_path_structured = "sample_structured.pdf" # Replace with your PDF file path
+
+if os.path.exists(pdf_file_path_structured):
+    print(f"\nAttempting to extract structured text from: {pdf_file_path_structured}")
+    # This uses the new wrapper that leverages PPStructure for layout analysis
+    structured_text = extract_structured_text_from_pdf_wrapper(pdf_file_path_structured, lang='en')
+
+    print("\n--- Extracted Structured Text ---")
+    print(structured_text)
+    print("--- End of Structured Text ---")
+else:
+    print(f"PDF file '{pdf_file_path_structured}' not found. Please create it or provide a valid path.")
+
+```
+This function first analyzes the PDF's layout using `PPStructure` to identify elements like text blocks, tables, titles, etc. It then reconstructs the text content based on this structure, aiming for a more readable and logically ordered output.
+The `use_gpu` parameter can be set to `True` in both wrappers if you have a compatible GPU setup and the GPU-enabled version of PaddlePaddle installed, which can significantly speed up processing.

@@ -3,6 +3,8 @@ import os
 import logging
 # from duckduckgo_search import DDGS # Commented out DDGS
 from googlesearch import search as google_search_func
+from memory import Memory # Added Memory import
+from pdf_vision_assistant import PDFVisionAssistant # For shared memory demo
 import re
 import time
 from urllib.parse import urlparse
@@ -22,7 +24,9 @@ class ResearchAgent:
             api_key=os.getenv("DEEPSEEK_API_KEY"),  # Fetch API key from environment variable
             base_url=os.getenv("DEEPSEEK_BASE_URL")  # Fetch base URL from environment variable
         )
+        self.memory = Memory() # Initialize Memory
         self.report_sections = []
+        # search_history and reference_map will be loaded from memory per topic in research_cycle
         self.search_history = []
         self.reference_index = 1
         self.reference_map = {}
@@ -117,8 +121,11 @@ class ResearchAgent:
 
         results.sort(key=lambda x: x['credibility']['total'], reverse=True)
         # Take up to num_results * 2 because we combined three searches with increased individual aims.
-        final_results = results[:int(num_results * 2)] 
+        final_results = results[:int(num_results * 2)]
+        # Update search history in memory
         self.search_history.append({"query": query, "results": [r['url'] for r in final_results]})
+        if self.initial_topic: # Ensure initial_topic is set before saving
+            self.memory.add_to_memory("search_histories", self.initial_topic, self.search_history)
         logger.info(f"Selected {len(final_results)} results for query '{query}' after processing and sorting.")
         return final_results
     
@@ -287,6 +294,9 @@ Begin your analysis now:
                     self.reference_map[current_ref_num] = {'url': clean_url, 'title': title_for_ref}
                     citation_text = f"[{current_ref_num}]"
                     self.reference_index += 1
+                    # Save updated reference_map to memory
+                    if self.initial_topic:
+                        self.memory.add_to_memory("reference_maps", self.initial_topic, self.reference_map)
                 else:
                     citation_text = f"[{existing_ref_num}]"
                 
@@ -475,9 +485,33 @@ Ensure the section is comprehensive, well-structured, and maintains an academic 
         logger.info(f"🚀 Initializing Research For Topic: {topic} (Mode: {research_mode})")
         self.initial_topic = topic
         self.research_mode = research_mode # Set the mode for this cycle
-        self.report_sections = [] # Reset for new research
-        self.reference_map = {} # Reset for new research
-        self.reference_index = 1
+
+        # Load existing data from memory for this topic
+        logger.info(f"Attempting to load past data for topic '{topic}' from memory.")
+        self.search_history = self.memory.get_from_memory("search_histories", self.initial_topic) or []
+        self.reference_map = self.memory.get_from_memory("reference_maps", self.initial_topic) or {}
+
+        if self.reference_map:
+            # Ensure keys are integers for max() when loaded from JSON
+            int_keys = [int(k) for k in self.reference_map.keys()]
+            self.reference_index = max(int_keys, default=0) + 1
+            logger.info(f"Loaded {len(self.reference_map)} references. Next reference index: {self.reference_index}")
+        else:
+            self.reference_index = 1
+            logger.info("No existing references found for this topic. Starting fresh.")
+
+        if self.search_history:
+            logger.info(f"Loaded {len(self.search_history)} past search queries for this topic.")
+
+        # Check if a report for this topic already exists
+        existing_report_info = self.memory.get_from_memory("research_reports", topic)
+        if existing_report_info:
+            report_timestamp = existing_report_info.get("timestamp", "N/A")
+            report_mode = existing_report_info.get("mode", "N/A")
+            logger.info(f"Note: A report for '{topic}' (mode: {report_mode}) created on {report_timestamp} already exists in memory.")
+            # Potentially add logic here to ask user if they want to overwrite or use existing. For now, just a note.
+
+        self.report_sections = [] # Reset for new research generation cycle (content itself is from analysis of queries)
 
         queries = [topic] # Start with the main topic
         # For market research, we might want a more structured set of initial queries
@@ -651,13 +685,27 @@ Ensure the section is comprehensive, well-structured, and maintains an academic 
             with open(md_filename, 'w', encoding='utf-8') as f:
                 f.write(full_report_md)
             logger.info(f"\n✅ Markdown Report compiled and saved as: {md_filename} ({len(full_report_md.split())} words approx.)")
+
+            # Save report to memory
+            self.memory.add_to_memory(
+                "research_reports",
+                self.initial_topic,
+                {
+                    "content_md": full_report_md, # Storing full markdown
+                    "timestamp": timestamp,
+                    "mode": self.research_mode,
+                    "references_count": len(self.reference_map),
+                    "search_queries_count": len(self.search_history)
+                }
+            )
+            logger.info(f"Report for '{self.initial_topic}' saved to memory.")
             
             # Attempt PDF export
             self.export_report_to_pdf(full_report_md, base_filename)
 
             return full_report_md
         except Exception as e:
-            logger.error(f"Error saving report to file: {str(e)}")
+            logger.error(f"Error saving report to file or memory: {str(e)}")
             return "Error: Could not save the report. Full content might be lost. Check logs."
 
     def export_report_to_pdf(self, markdown_content: str, base_filename: str):
@@ -702,6 +750,85 @@ Ensure the section is comprehensive, well-structured, and maintains an academic 
             logger.info("Please ensure WeasyPrint and its dependencies (like Pango, Cairo) are correctly installed.")
             logger.info("For Debian/Ubuntu, try: sudo apt-get install libpango-1.0-0 libcairo2 libgdk-pixbuf2.0-0")
 
+    def recall_past_research_reports(self, keywords: list[str], similarity_threshold: int = 1) -> list[dict]:
+        """
+        Searches memory for research reports matching a list of keywords.
+
+        Args:
+            keywords (list[str]): A list of keywords to search for in report topics.
+            similarity_threshold (int): The minimum number of keywords that must match
+                                        for a report to be considered relevant. Defaults to 1.
+
+        Returns:
+            list[dict]: A list of matching reports, each containing topic, timestamp,
+                        and a preview of the content.
+        """
+        logger.info(f"Recalling past research reports with keywords: {keywords} (threshold: {similarity_threshold})")
+        all_report_topics = self.memory.list_memory_type("research_reports")
+        matching_reports = []
+
+        if not all_report_topics:
+            logger.info("No research reports found in memory.")
+            return []
+
+        for topic in all_report_topics:
+            report_data = self.memory.get_from_memory("research_reports", topic)
+            if report_data and isinstance(report_data, dict):
+                match_count = 0
+                for keyword in keywords:
+                    if keyword.lower() in topic.lower():
+                        match_count += 1
+
+                if match_count >= similarity_threshold:
+                    content_preview = report_data.get("content_md", "")[:200] + "..." if report_data.get("content_md") else "No content preview available."
+                    matching_reports.append({
+                        "topic": topic,
+                        "timestamp": report_data.get("timestamp", "N/A"),
+                        "mode": report_data.get("mode", "N/A"),
+                        "content_preview": content_preview,
+                        "references_count": report_data.get("references_count", 0),
+                        "search_queries_count": report_data.get("search_queries_count", 0)
+                    })
+
+        if matching_reports:
+            logger.info(f"Found {len(matching_reports)} relevant reports.")
+        else:
+            logger.info("No relevant reports found matching the criteria.")
+        return matching_reports
+
+    def list_all_research_topics(self) -> list[str]:
+        """
+        Lists all research topics for which reports are stored in memory.
+
+        Returns:
+            list[str]: A list of all research topics (keys) from the "research_reports" memory type.
+        """
+        logger.info("Listing all research topics from memory.")
+        topics = self.memory.list_memory_type("research_reports")
+        if topics:
+            logger.info(f"Found {len(topics)} research topics in memory.")
+        else:
+            logger.info("No research topics found in memory.")
+        return topics
+
+    def get_specific_report(self, topic: str) -> dict | None:
+        """
+        Retrieves a specific research report from memory by its topic.
+
+        Args:
+            topic (str): The exact topic of the report to retrieve.
+
+        Returns:
+            dict | None: The report data (dictionary) if found, otherwise None.
+        """
+        logger.info(f"Retrieving specific report for topic: '{topic}'")
+        report_data = self.memory.get_from_memory("research_reports", topic)
+        if report_data:
+            logger.info(f"Report found for topic '{topic}'.")
+        else:
+            logger.warning(f"No report found for topic '{topic}'.")
+        return report_data
+
 # Example usage:
 if __name__ == "__main__":
     agent = ResearchAgent()
@@ -709,6 +836,13 @@ if __name__ == "__main__":
     # Switch to General Research on GRPO with Unsloth
     logger.info("\n--- Starting General Research for In-depth Report --- ")
     general_topic = "Investigate why major AI labs are not widely adopting or publishing on memory-augmented architectures despite their biological inspiration, potential for self-directed learning, and long-term reasoning capabilities."
+    # Check memory for this topic before running
+    existing_report_data = agent.memory.get_from_memory("research_reports", general_topic)
+    if existing_report_data:
+        logger.info(f"Found existing report for '{general_topic}' in memory from {existing_report_data.get('timestamp', 'N/A')}.")
+        # Example: Could add a prompt here: "Do you want to re-run research or view existing?"
+        # For now, we'll just proceed to re-run. A real application might offer choices.
+
     final_report_markdown_general = agent.research_cycle(
         topic=general_topic,
         depth=3, # Increase depth for more comprehensive coverage (3-4 recommended)
@@ -721,19 +855,104 @@ if __name__ == "__main__":
         logger.info(f"\n--- GENERAL REPORT (Markdown) PREVIEW ---")
         # Limiting preview to avoid excessive console output
         # The full report is saved to MD and PDF files.
-        # print(final_report_markdown_general[:3000] + "...")
+        # print(final_report_markdown_general[:3000] + "...") # For brevity in example
     else:
         logger.error(f"\nGeneral research failed or produced no report: {final_report_markdown_general}")
 
     # Market Research Example (can be uncommented to run)
     # logger.info("\n--- Starting Market Research --- ")
     # market_research_topic = "Tesla and its competitors"
+    # # Quick check if a report on Tesla already exists
+    # tesla_reports = agent.recall_past_research_reports(keywords=["Tesla"], similarity_threshold=1)
+    # if tesla_reports:
+    #     logger.info(f"Found {len(tesla_reports)} existing reports that might be related to 'Tesla':")
+    #     for r_info in tesla_reports:
+    #         logger.info(f"  - Topic: {r_info['topic']} (Timestamp: {r_info['timestamp']})")
+    #
     # final_report_markdown_market = agent.research_cycle(
     #     topic=market_research_topic,
-    #     research_mode="market_research" 
+    #     research_mode="market_research"
     # )
     # if isinstance(final_report_markdown_market, str) and not final_report_markdown_market.startswith("Error"):
     #     logger.info(f"\n--- MARKET RESEARCH REPORT PREVIEW ---")
     #     # print(final_report_markdown_market[:2000] + "...")
     # else:
     #     logger.error(f"\nMarket research failed or produced no report: {final_report_markdown_market}")
+
+    logger.info("\n--- Demonstrating Memory Interaction Methods ---")
+    all_topics = agent.list_all_research_topics()
+    logger.info(f"All research topics currently in memory: {all_topics}")
+
+    if all_topics:
+        logger.info(f"\nAttempting to recall reports related to 'AI' and 'memory':")
+        recalled_reports_ai_memory = agent.recall_past_research_reports(keywords=["AI", "memory"], similarity_threshold=2)
+        if recalled_reports_ai_memory:
+            for report_info in recalled_reports_ai_memory:
+                logger.info(f"  Found matching report: '{report_info['topic']}' (Mode: {report_info['mode']}, Timestamp: {report_info['timestamp']})")
+                logger.info(f"    Preview: {report_info['content_preview']}")
+        else:
+            logger.info("  No reports found matching 'AI' and 'memory' with threshold 2.")
+
+        logger.info(f"\nAttempting to recall reports related to 'biological':")
+        recalled_reports_bio = agent.recall_past_research_reports(keywords=["biological"])
+        if recalled_reports_bio:
+            for report_info in recalled_reports_bio:
+                logger.info(f"  Found matching report: '{report_info['topic']}' (Mode: {report_info['mode']}, Timestamp: {report_info['timestamp']})")
+        else:
+            logger.info("  No reports found matching 'biological'.")
+
+        # Get a specific report (assuming one of the all_topics exists)
+        if general_topic in all_topics: # Use the topic from the earlier general research run
+            logger.info(f"\nAttempting to retrieve specific report for topic: '{general_topic}'")
+            specific_report = agent.get_specific_report(general_topic)
+            if specific_report:
+                logger.info(f"Successfully retrieved report for '{general_topic}'. Timestamp: {specific_report.get('timestamp')}")
+                # logger.info(f"Full content of '{general_topic}':\n{specific_report.get('content_md')[:500]}...") # Potentially very long
+            else:
+                logger.info(f"Could not retrieve report for '{general_topic}' (this shouldn't happen if it was just created).")
+    else:
+        logger.info("No topics in memory to demonstrate recall or specific get.")
+
+    logger.info("\n--- Demonstrating Shared Memory with PDFVisionAssistant ---")
+    # Instantiate PDFVisionAssistant, passing the ResearchAgent's memory instance
+    # This allows PDFVisionAssistant to save its findings to the same memory file.
+    pdf_assistant = PDFVisionAssistant(memory_instance=agent.memory)
+
+    # Simulate PDFVisionAssistant processing a PDF and saving its extraction to memory
+    # In a real scenario, you would call:
+    # pdf_assistant.extract_text_from_pdf("path/to/actual/document.pdf")
+    # or pdf_assistant.analyze_pdf_layout_and_text("path/to/actual/document.pdf")
+
+    simulated_pdf_filename = "annual_report_2023.pdf" # Using basename as key, as per PDFVisionAssistant's implementation
+    simulated_pdf_full_path = f"dummy/path/to/{simulated_pdf_filename}" # Full path for context in the value
+    timestamp_pdf = time.strftime("%Y%m%d-%H%M%S")
+
+    # Manually add a simulated entry as if PDFVisionAssistant saved it
+    agent.memory.add_to_memory(
+        memory_type="pdf_extractions",
+        key=simulated_pdf_filename, # PDFVisionAssistant uses os.path.basename(pdf_path) as key
+        value={
+            "type": "text",
+            "content": "This is the simulated extracted text from the annual_report_2023.pdf. It contains important financial data and strategic outlooks.",
+            "timestamp": timestamp_pdf,
+            "source_pdf_path": simulated_pdf_full_path
+        }
+    )
+    logger.info(f"Simulated saving of PDF extraction for '{simulated_pdf_filename}' to shared memory by PDFVisionAssistant.")
+
+    # Now, demonstrate ResearchAgent retrieving this data
+    retrieved_pdf_data = agent.memory.get_from_memory("pdf_extractions", simulated_pdf_filename)
+    if retrieved_pdf_data:
+        logger.info(f"ResearchAgent found extracted PDF data for '{simulated_pdf_filename}' in shared memory.")
+        logger.info(f"  Retrieved data type: {retrieved_pdf_data.get('type')}")
+        logger.info(f"  Retrieved content snippet: {retrieved_pdf_data.get('content', '')[:50]}...")
+        logger.info(f"  Retrieved timestamp: {retrieved_pdf_data.get('timestamp')}")
+        logger.info(f"  Original PDF path: {retrieved_pdf_data.get('source_pdf_path')}")
+    else:
+        logger.info(f"ResearchAgent did not find PDF data for '{simulated_pdf_filename}' in shared memory (this should not happen in simulation).")
+
+    # Example of how ResearchAgent might list all PDF extractions
+    all_pdf_extractions_keys = agent.memory.list_memory_type("pdf_extractions")
+    logger.info(f"\nAll PDF extraction keys found in memory by ResearchAgent: {all_pdf_extractions_keys}")
+    if simulated_pdf_filename in all_pdf_extractions_keys:
+        logger.info(f"Confirmed '{simulated_pdf_filename}' is listed under 'pdf_extractions'.")

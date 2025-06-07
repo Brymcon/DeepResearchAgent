@@ -2,6 +2,8 @@ import os
 import fitz  # PyMuPDF
 from paddleocr import PaddleOCR, PPStructure
 import logging
+import time # Added for timestamp
+from memory import Memory # Added for shared memory
 import numpy as np
 import cv2
 
@@ -13,14 +15,16 @@ class PDFVisionAssistant:
     An agent that extracts text from PDF files using PaddleOCR.
     It can also attempt to understand document structure.
     """
-    def __init__(self, lang='en', use_gpu=False, **kwargs):
+    def __init__(self, lang='en', use_gpu=False, memory_instance: Memory = None, **kwargs):
         """
         Initializes the PDFVisionAssistant with PaddleOCR.
         Args:
             lang (str): Language code for OCR (e.g., 'en', 'ch').
             use_gpu (bool): Whether to use GPU for OCR.
+            memory_instance (Memory, optional): An instance of the Memory class for shared memory. Defaults to None.
             **kwargs: Additional keyword arguments for PaddleOCR initialization.
         """
+        self.memory = memory_instance
         logger.info(f"Initializing PaddleOCR with lang='{lang}', use_gpu={use_gpu}")
         try:
             # Initialize PaddleOCR. You might need to adjust model paths or other parameters.
@@ -113,7 +117,24 @@ class PDFVisionAssistant:
 
         logger.info(f"Finished processing PDF: {pdf_path}")
         doc.close()
-        return "\n\n---\nPage Break\n---\n\n".join(extracted_text_parts)
+
+        full_extracted_text = "\n\n---\nPage Break\n---\n\n".join(extracted_text_parts)
+
+        if self.memory:
+            try:
+                # Sanitize pdf_path to be a valid key if needed, though usually paths are fine.
+                memory_key = os.path.basename(pdf_path) # Using basename as key for simplicity
+                timestamp = time.strftime("%Y%m%d-%H%M%S")
+                self.memory.add_to_memory(
+                    memory_type="pdf_extractions",
+                    key=memory_key, # Using full path as key might be better for uniqueness
+                    value={"type": "text", "content": full_extracted_text, "timestamp": timestamp, "source_pdf_path": pdf_path}
+                )
+                logger.info(f"Saved extracted text for '{memory_key}' to shared memory.")
+            except Exception as e:
+                logger.error(f"Failed to save extracted text for '{pdf_path}' to memory: {e}", exc_info=True)
+
+        return full_extracted_text
 
     # TODO: Add method for structured data extraction if PPStructure is to be used.
     # def extract_structure_from_pdf(self, pdf_path: str):
@@ -228,6 +249,20 @@ class PDFVisionAssistant:
 
         logger.info(f"Finished layout analysis for PDF: {pdf_path}")
         doc.close()
+
+        if self.memory and all_page_results and not (len(all_page_results) == 1 and 'error' in all_page_results[0]):
+            try:
+                memory_key = os.path.basename(pdf_path) # Using basename as key
+                timestamp = time.strftime("%Y%m%d-%H%M%S")
+                self.memory.add_to_memory(
+                    memory_type="pdf_extractions",
+                    key=memory_key, # Using full path as key might be better
+                    value={"type": "layout", "content": all_page_results, "timestamp": timestamp, "source_pdf_path": pdf_path}
+                )
+                logger.info(f"Saved layout analysis for '{memory_key}' to shared memory.")
+            except Exception as e:
+                logger.error(f"Failed to save layout analysis for '{pdf_path}' to memory: {e}", exc_info=True)
+
         return all_page_results
 
     def generate_structured_text_from_layout(self, layout_results: list) -> str:
@@ -301,7 +336,7 @@ class PDFVisionAssistant:
         return "\n\n--- Page Break ---\n\n".join(full_document_text_parts)
 
 
-def extract_text_from_pdf_wrapper(pdf_path: str, lang: str = 'en', use_gpu: bool = False) -> str:
+def extract_text_from_pdf_wrapper(pdf_path: str, lang: str = 'en', use_gpu: bool = False, memory_instance: Memory = None) -> str:
     """
     A wrapper function to easily extract text from a PDF using PDFVisionAssistant.
 
@@ -309,6 +344,7 @@ def extract_text_from_pdf_wrapper(pdf_path: str, lang: str = 'en', use_gpu: bool
         pdf_path (str): Path to the PDF file.
         lang (str): Language code for OCR (e.g., 'en', 'ch'). Defaults to 'en'.
         use_gpu (bool): Whether to attempt using GPU for PaddleOCR. Defaults to False.
+        memory_instance (Memory, optional): An instance of the Memory class for shared memory. Defaults to None.
 
     Returns:
         str: Extracted text from the PDF, or an error message if extraction fails.
@@ -323,7 +359,7 @@ def extract_text_from_pdf_wrapper(pdf_path: str, lang: str = 'en', use_gpu: bool
         main_logger = logging.getLogger(__name__) # Use the module's logger
         main_logger.info(f"PDFVisionAssistant wrapper called for PDF: {pdf_path} with lang='{lang}', use_gpu={use_gpu}")
 
-        assistant = PDFVisionAssistant(lang=lang, use_gpu=use_gpu)
+        assistant = PDFVisionAssistant(lang=lang, use_gpu=use_gpu, memory_instance=memory_instance)
         text_content = assistant.extract_text_from_pdf(pdf_path)
 
         main_logger.info(f"Successfully processed PDF: {pdf_path} using wrapper.")
@@ -334,7 +370,7 @@ def extract_text_from_pdf_wrapper(pdf_path: str, lang: str = 'en', use_gpu: bool
         return f"Error: An unexpected error occurred in the PDF processing wrapper: {str(e)}"
 
 
-def extract_structured_text_from_pdf_wrapper(pdf_path: str, lang: str = 'en', use_gpu: bool = False) -> str:
+def extract_structured_text_from_pdf_wrapper(pdf_path: str, lang: str = 'en', use_gpu: bool = False, memory_instance: Memory = None) -> str:
     """
     A wrapper function to extract text from a PDF, structured using layout analysis.
 
@@ -342,6 +378,7 @@ def extract_structured_text_from_pdf_wrapper(pdf_path: str, lang: str = 'en', us
         pdf_path (str): Path to the PDF file.
         lang (str): Language code for OCR (e.g., 'en', 'ch'). Defaults to 'en'.
         use_gpu (bool): Whether to attempt using GPU for PaddleOCR. Defaults to False.
+        memory_instance (Memory, optional): An instance of the Memory class for shared memory. Defaults to None.
 
     Returns:
         str: Extracted text from the PDF, structured based on layout,
@@ -354,7 +391,7 @@ def extract_structured_text_from_pdf_wrapper(pdf_path: str, lang: str = 'en', us
         main_logger = logging.getLogger(__name__)
         main_logger.info(f"Structured PDF extraction wrapper called for PDF: {pdf_path} with lang='{lang}', use_gpu={use_gpu}")
 
-        assistant = PDFVisionAssistant(lang=lang, use_gpu=use_gpu)
+        assistant = PDFVisionAssistant(lang=lang, use_gpu=use_gpu, memory_instance=memory_instance)
 
         layout_results = assistant.analyze_pdf_layout_and_text(pdf_path)
 

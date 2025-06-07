@@ -1,0 +1,2 @@
+class IndexerAgent:
+    pass

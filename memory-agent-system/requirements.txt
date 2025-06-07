@@ -4,3 +4,4 @@ torch
 sentence-transformers
 requests
 numpy
+duckdb

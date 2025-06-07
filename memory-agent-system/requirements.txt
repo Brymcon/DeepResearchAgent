@@ -1,0 +1,6 @@
+faiss-cpu
+transformers
+torch
+sentence-transformers
+requests
+numpy

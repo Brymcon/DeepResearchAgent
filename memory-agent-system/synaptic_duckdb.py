@@ -140,8 +140,6 @@ class SynapticDuckDB:
         if not cue_embedding: import pandas as pd; return pd.DataFrame() # Return empty DataFrame
         flat_cue_embedding = [float(x) for x in cue_embedding]
 
-        # Decay constant per second (rate for exp(-decay*time_diff_seconds))
-        # Higher decay_rate_hourly means faster decay.
         decay_constant_per_second = temporal_decay_rate_hourly / 3600.0
 
         recursive_sql = f"""
@@ -208,24 +206,23 @@ class SynapticDuckDB:
             if not current_memory_details: return
             current_strength_neuron = float(current_memory_details[0])
 
-            # Calculate change based on signal direction and room for change
             actual_increment_neuron = 0.0
             if reinforcement_signal > 0: # Strengthening
                 room_for_growth = max_strength - current_strength_neuron
-                if room_for_growth > 1e-6: # Only if there's room to grow
-                    effort_neuron = reinforcement_signal * 10.0 # Scale signal for logistic curve
+                if room_for_growth > 1e-6:
+                    effort_neuron = reinforcement_signal * 10.0
                     gain_fraction = logistic_growth(effort_neuron, L=1.0, k=growth_k_neuron, x0=growth_x0_neuron)
                     actual_increment_neuron = room_for_growth * gain_fraction
-            else: # Weakening (reinforcement_signal < 0)
+            else: # Weakening
                 room_for_decline = current_strength_neuron - min_strength
-                if room_for_decline > 1e-6: # Only if there's room to decline
-                    effort_neuron = abs(reinforcement_signal) * 10.0 # Use absolute for effort
+                if room_for_decline > 1e-6:
+                    effort_neuron = abs(reinforcement_signal) * 10.0
                     decline_fraction = logistic_growth(effort_neuron, L=1.0, k=growth_k_neuron, x0=growth_x0_neuron)
                     actual_increment_neuron = - (room_for_decline * decline_fraction)
 
             new_synaptic_strength = float(np.clip(current_strength_neuron + actual_increment_neuron, min_strength, max_strength))
 
-            if abs(new_synaptic_strength - current_strength_neuron) > 1e-5: # Update only if changed significantly
+            if abs(new_synaptic_strength - current_strength_neuron) > 1e-5:
                 self.conn.execute("UPDATE synaptic_memories SET synaptic_strength = ?, activation_count = activation_count + 1, last_accessed = CURRENT_TIMESTAMP WHERE neuron_id = ?;", [new_synaptic_strength, memory_id])
 
             pathways = self.conn.execute("SELECT pathway_id, connection_strength FROM neural_pathways WHERE source_neuron = ? OR target_neuron = ?;", [memory_id, memory_id]).fetchall()
@@ -246,9 +243,9 @@ class SynapticDuckDB:
                         decline_fraction_pathway = logistic_growth(effort_pathway, L=1.0, k=growth_k_pathway, x0=growth_x0_pathway)
                         actual_increment_pathway = - (room_for_decline_pathway * decline_fraction_pathway)
 
-                if abs(actual_increment_pathway) > 1e-5: # Only if change is significant
+                if abs(actual_increment_pathway) > 1e-5:
                     new_conn_strength = float(np.clip(current_conn_strength + actual_increment_pathway, min_strength, max_strength))
-                    pathway_updates.append((new_conn_strength, datetime.datetime.now(), pathway_id)) # Added last_used
+                    pathway_updates.append((new_conn_strength, datetime.datetime.now(), pathway_id))
 
             if pathway_updates:
                 update_pathways_sql = "UPDATE neural_pathways SET connection_strength = ?, last_used = ? WHERE pathway_id = ?;"
@@ -264,23 +261,16 @@ class SynapticDuckDB:
         '''Prunes weak pathways and optionally those from low-entropy distributions.'''
         pruned_count_total = 0
         try:
-            # Absolute strength pruning
             original_count = self.conn.execute("SELECT COUNT(*) FROM neural_pathways").fetchone()[0]
             delete_sql = "DELETE FROM neural_pathways WHERE connection_strength < ?;"
             self.conn.execute(delete_sql, [absolute_strength_threshold])
             current_count = self.conn.execute("SELECT COUNT(*) FROM neural_pathways").fetchone()[0]
             pruned_absolute = original_count - current_count
-            # if pruned_absolute > 0: print(f"SynapticDuckDB (Pruning): Removed {pruned_absolute} pathways with strength < {absolute_strength_threshold}.")
             pruned_count_total += pruned_absolute
 
-            # Entropy-based pruning (optional)
             if enable_entropy_pruning:
-                pruned_entropy_count = 0
-                # This part requires a helper 'calculate_connection_entropy' which is not defined in this script.
-                # For now, this block will be skipped unless that helper is available.
-                # print("SynapticDuckDB (Pruning): Entropy pruning skipped as 'calculate_connection_entropy' is not defined here.")
+                # Placeholder for entropy pruning logic, requires calculate_connection_entropy helper
                 pass
-            # if pruned_count_total == 0: print(f"SynapticDuckDB (Pruning): No pathways met criteria for pruning.")
         except Exception as e:
             print(f"SynapticDuckDB: Error during synaptic pruning: {e}")
 
@@ -316,7 +306,6 @@ class SynapticDuckDB:
             result = self.conn.execute("SELECT COUNT(neuron_id) FROM synaptic_memories WHERE synaptic_strength >= ?;", [strength_threshold]).fetchone()
             return result[0] if result else 0
         except Exception as e:
-            # print(f"SynapticDuckDB: Error counting high affinity memories: {e}")
             return 0
 
     def get_high_affinity_memories(self, strength_threshold: float = 0.7, limit: int = 100) -> list[dict]:
@@ -338,7 +327,35 @@ class SynapticDuckDB:
                 })
             return memories
         except Exception as e:
-            # print(f"SynapticDuckDB: Error fetching high affinity memories: {e}")
+            return []
+
+    def get_memories_for_clustering(self, sample_size: int = None, min_activation_count: int = 0) -> list[dict]:
+        '''Fetches neuron_id and memory_trace for memories, optionally sampled or filtered.
+        Args:
+            sample_size: If not None, randomly samples this many memories.
+            min_activation_count: Only include memories with at least this many activations.
+        Returns:
+            A list of dictionaries, each with 'neuron_id' and 'memory_trace'.
+        '''
+        if not self.conn:
+            return []
+        try:
+            base_query = "SELECT neuron_id, memory_trace FROM synaptic_memories WHERE activation_count >= ?"
+            params = [min_activation_count]
+
+            if sample_size is not None and sample_size > 0:
+                query = f"SELECT neuron_id, memory_trace FROM ({base_query} ORDER BY random()) subquery LIMIT ?"
+                params.append(sample_size)
+            else:
+                query = base_query + " ORDER BY neuron_id;"
+
+            results_raw = self.conn.execute(query, params).fetchall()
+            memories_for_clustering = []
+            for row in results_raw:
+                memories_for_clustering.append({'neuron_id': row[0], 'memory_trace': row[1]})
+            return memories_for_clustering
+        except Exception as e:
+            print(f"SynapticDuckDB: Error fetching memories for clustering: {e}")
             return []
 
     def close(self):
@@ -348,13 +365,3 @@ class SynapticDuckDB:
 
     def __del__(self):
         self.close()
-
-"""
-
-with open(filename, 'w') as f:
-    f.write(full_file_content)
-
-print(f"File {filename} updated with refined SynapticDuckDB methods.")
-
-END_PYTHON
-cat memory-agent-system/synaptic_duckdb.py

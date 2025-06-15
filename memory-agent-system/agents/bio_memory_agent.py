@@ -92,26 +92,17 @@ class BioMemoryAgent:
 
     def get_memory_by_id(self, memory_id: int) -> dict | None:
         '''Retrieves a single memory by its ID via SynapticDuckDB.'''
-        # This method might be needed by IndexerAgent or other specific agents
-        # The get_memory_by_id was defined in old VectorMemory, useful to have here too.
-        # SynapticDuckDB doesn't have this method explicitly yet, we can add it or call SQL directly.
-        # For now, let's assume SynapticDuckDB should have it or we add a direct query here.
-        # print(f"BioMemoryAgent: Getting memory by ID {memory_id}")
-        if hasattr(self.db, 'get_memory_by_id'): # If SynapticDuckDB implements it
+        if hasattr(self.db, 'get_memory_by_id'):
              try:
                  return self.db.get_memory_by_id(memory_id)
              except Exception as e:
                  print(f"BioMemoryAgent: Error in get_memory_by_id (via SynapticDuckDB method) for ID {memory_id}: {e}")
                  return None
         else:
-            # print("BioMemoryAgent: SynapticDuckDB does not have get_memory_by_id, direct query placeholder.")
-            # Placeholder: direct query if SynapticDuckDB doesn't have the method
             try:
                 query = "SELECT * FROM synaptic_memories WHERE neuron_id = ?"
                 result = self.db.conn.execute(query, [memory_id]).fetchone()
                 if result:
-                    # Convert tuple to dict - assumes column order or get column names
-                    # This part needs to be robust if used
                     cols = [desc[0] for desc in self.db.conn.description] if self.db.conn.description else []
                     return dict(zip(cols, result)) if cols else None
                 return None
@@ -123,11 +114,9 @@ class BioMemoryAgent:
         '''Fetches all memories or a subset, e.g., for IndexerAgent.
            Returns list of dicts.
         '''
-        # print(f"BioMemoryAgent: Getting all memories for processing (limit: {limit})")
-        # This method might be needed by IndexerAgent. SynapticDuckDB doesn't have this explicitly.
-        # We can add it to SynapticDuckDB or query directly here.
         try:
-            query = "SELECT neuron_id, content, tags FROM synaptic_memories" # Example fields for Indexer
+            # Updated to fetch tags as well, needed by IndexerAgent's current batch logic
+            query = "SELECT neuron_id, content, tags FROM synaptic_memories"
             if limit:
                 query += f" LIMIT {int(limit)}"
             results_raw = self.db.conn.execute(query).fetchall()
@@ -143,21 +132,36 @@ class BioMemoryAgent:
 
     def update_memory_tags(self, memory_id: int, new_tags: list[str]):
         '''Updates the tags for a given memory. Used by IndexerAgent.'''
-        # print(f"BioMemoryAgent: Updating tags for memory ID {memory_id}")
-        # This method is needed by IndexerAgent. Assumes direct execution or method in SynapticDuckDB.
         try:
-            # Using list_distinct(list_cat(tags, new_tags_param)) might be too simple if we want to *replace* or *ensure only new* tags.
-            # For now, let's assume a full replacement or a more sophisticated merge in SynapticDuckDB if needed.
-            # The IndexerAgent currently uses: list_distinct(list_cat(tags, ?))
-            # So, this BioMemoryAgent method should just pass it through if SynapticDuckDB handles it,
-            # or implement the list_distinct(list_cat(tags, ?)) here directly.
-            # For now, direct SQL as IndexerAgent does it.
-            # The IndexerAgent actually calls self.memory_agent.memory.conn.execute directly.
-            # This should be refactored so IndexerAgent calls a method on BioMemoryAgent.
+            # This direct SQL matches what IndexerAgent was trying to do.
+            # Assumes 'tags' column exists on synaptic_memories table and is of a list type (e.g., VARCHAR[]).
+            # Note: SynapticDuckDB schema defines `tags VARCHAR[]` but was not in `synaptic_memories` table. This needs alignment.
+            # For now, assuming the column will be added or this method adapted.
+            # If SynapticDuckDB's `synaptic_memories` table doesn't have `tags`, this will fail.
+            # The IndexerAgent depends on this.
+            # The `synaptic_memories` table in `synaptic_duckdb.py` does NOT have a `tags` column.
+            # This method needs to be re-evaluated once `tags` are properly in `synaptic_memories`.
+            # For now, let's assume it's being added to SynapticDuckDB's schema.
+            # If `tags` is not a list type in DB, list_cat and list_distinct won't work.
             update_sql = "UPDATE synaptic_memories SET tags = list_distinct(list_cat(tags, ?)) WHERE neuron_id = ?"
+            # A safer alternative if tags might not exist:
+            # update_sql = "UPDATE synaptic_memories SET tags = ? WHERE neuron_id = ?"
+            # And then manage the list merging in Python or ensure DB functions handle NULLs.
             self.db.conn.execute(update_sql, [new_tags, memory_id])
         except Exception as e:
             print(f"BioMemoryAgent: Error updating tags for memory ID {memory_id}: {e}")
+
+    def get_memories_for_clustering(self, sample_size: int = None, min_activation_count: int = 0) -> list[dict]:
+        '''Fetches memories (neuron_id, memory_trace) for clustering via SynapticDuckDB.'''
+        # print(f"BioMemoryAgent: Getting memories for clustering (sample: {sample_size}, min_activations: {min_activation_count})")
+        if not self.db:
+            print("BioMemoryAgent: SynapticDB not available.")
+            return []
+        try:
+            return self.db.get_memories_for_clustering(sample_size=sample_size, min_activation_count=min_activation_count)
+        except Exception as e:
+            print(f"BioMemoryAgent: Error getting memories for clustering: {e}")
+            return []
 
     def get_db_connection(self):
         '''Provides direct access to the DuckDB connection for specialized agents if absolutely necessary.'''

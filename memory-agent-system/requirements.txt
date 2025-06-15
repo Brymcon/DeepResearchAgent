@@ -7,3 +7,4 @@ numpy
 duckdb
 ctransformers
 spacy # Optional: for NER in IndexerAgent. Download a model e.g. python -m spacy download en_core_web_sm
+scikit-learn

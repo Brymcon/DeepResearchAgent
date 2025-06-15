@@ -2,61 +2,50 @@ import re
 
 class OutputAgent:
     def __init__(self):
-        print("OutputAgent: Initialized.")
+        # print("OutputAgent: Initialized.") # Reduced verbosity for library-like class
+        pass
 
     def _to_markdown_paragraphs(self, text: str) -> str:
-        """Ensures paragraphs are separated by double newlines for basic Markdown feel."""
         if not text or text.strip() == "":
             return "No response content to display."
-        # Normalize newlines: replace multiple newlines with a single one first
-        text = re.sub(r'\n+', '\n', text).strip()
-        # Then, ensure paragraphs (separated by single newlines from LLM) become double for Markdown
+        text = str(text) # Ensure it's a string
+        text = re.sub(r'\n{2,}', '\n', text).strip() # Replace multiple newlines with one
         paragraphs = text.split('\n')
-        # Filter out any empty paragraphs that might result from split
         paragraphs = [p.strip() for p in paragraphs if p.strip()]
         return '\n\n'.join(paragraphs)
 
     def deliver(self, response_text: str, sources: list = None):
         """
-        Processes the raw response text for final delivery to the user (e.g., console).
-        Applies basic formatting and will eventually handle source citations.
-
+        Processes the raw response text for final delivery, applying formatting
+        and appending source citations if provided.
         Args:
             response_text: The raw text response from the ReasoningAgent.
-            sources: Optional list of source information (e.g., dicts with title, link)
-                     to be appended to the response. (For future use)
+            sources: Optional list of source objects (dicts) used for the response.
+                     Each dict should have 'type' ('memory' or 'search') and 'data'.
         """
-        # print(f"OutputAgent: Received raw response: '{response_text[:100]}...' ") # Debug
-
         formatted_response = self._to_markdown_paragraphs(response_text)
 
-        # Placeholder for source citations - to be implemented later
-        if sources:
-            formatted_response += "\n\n---\nSources:\n"
-            for i, source in enumerate(sources):
-                title = source.get('title', 'Unknown Title')
-                link = source.get('link', '#')
-                formatted_response += f"[{i+1}] {title} ({link})\n"
-            formatted_response = formatted_response.strip()
+        if sources and len(sources) > 0:
+            citations = []
+            citations.append("\n\n---\n**Sources Considered:**")
+            for i, source_info in enumerate(sources):
+                source_type = source_info.get('type')
+                source_data = source_info.get('data')
+                citation = f"  [{i+1}] "
+                if source_type == 'memory' and source_data:
+                    mem_id = source_data.get('neuron_id', source_data.get('id', 'N/A'))
+                    mem_content_snip = str(source_data.get('content', ''))[:70] + "..."
+                    citation += f"Memory (ID: M{mem_id}): '{mem_content_snip}'"
+                elif source_type == 'search' and source_data:
+                    title = source_data.get('title', 'N/A')
+                    link = source_data.get('link', '#')
+                    citation += f"Web: '{title}' ({link})"
+                else:
+                    citation += f"Unknown source type or data: {str(source_info)[:100]}"
+                citations.append(citation)
 
-        # For now, deliver prints to console. This could be extended for other output channels.
+            if len(citations) > 1: # Only add if there are actual source strings
+                 formatted_response += "\n".join(citations)
+
         print("\nAssistant:")
         print(formatted_response)
-
-# Example Usage (for testing this agent directly):
-# if __name__ == '__main__':
-#     output_agent = OutputAgent()
-#     raw_text_from_llm = "This is the first paragraph.\nThis is the second paragraph. It might have multiple sentences.\n\nThis could be an intended third paragraph after a double newline from LLM."
-#     output_agent.deliver(raw_text_from_llm)
-
-#     raw_text_2 = "Single line response."
-#     output_agent.deliver(raw_text_2)
-
-#     raw_text_3 = "Sentence one.\nSentence two.\nSentence three."
-#     output_agent.deliver(raw_text_3)
-
-#     mock_sources = [
-#         {'title': 'Example Source 1', 'link': 'http://example.com/1'},
-#         {'title': 'Another Source', 'link': 'http://example.com/2'}
-#     ]
-#     output_agent.deliver("Response that uses sources.", sources=mock_sources)

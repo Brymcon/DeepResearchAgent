@@ -1,20 +1,18 @@
 import json
 import datetime
+from typing import Optional
 
 class InteractionLogger:
     def __init__(self, log_file="interactions.jsonl"):
         self.log_file = log_file
-        # Attempt to create the directory for the log file if it doesn't exist
-        # This is a common pattern but might be better handled by the calling code
-        # or by ensuring the main script runs from a location where it has write permissions.
-        # For now, assuming the directory of main.py is writable.
 
-    def log(self, user_input, response, context):
+    def log(self, user_input: str, response: str, context: str, reasoning_trace: Optional[str] = None):
         entry = {
             "timestamp": datetime.datetime.now().isoformat(),
             "input": user_input,
             "response": response,
-            "context": context # Context can be a string or a structured dict
+            "context": context, # Context can be a string or a structured dict
+            "reasoning_trace": reasoning_trace if reasoning_trace else "" # Add reasoning trace
         }
         try:
             with open(self.log_file, 'a') as f:

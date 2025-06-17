@@ -1,5 +1,5 @@
 import re
-from typing import List, Dict, Any, Optional # Added Optional
+from typing import List, Dict, Any, Optional
 
 class OutputAgent:
     def __init__(self):
@@ -7,32 +7,38 @@ class OutputAgent:
 
     def _to_markdown_paragraphs(self, text: str) -> str:
         if not text or text.strip() == "":
-            return "(No response content provided)" # Changed message
+            return "(No response content provided)"
         text = str(text)
         text = re.sub(r'\n{2,}', '\n', text).strip()
         paragraphs = text.split('\n')
         paragraphs = [p.strip() for p in paragraphs if p.strip()]
         return '\n\n'.join(paragraphs)
 
-    def deliver(self, response_text: str, sources: Optional[List[Dict[str, Any]]] = None):
+    def deliver(self, response_text: str, sources: Optional[List[Dict[str, Any]]] = None, reasoning_text: Optional[str] = None, show_reasoning: bool = True):
         """
-        Processes the raw response text for final delivery, applying formatting
-        and appending source citations if provided.
+        Processes the raw response text and optional reasoning/sources for final delivery.
         Args:
-            response_text: The raw text response from the ReasoningAgent.
-            sources: Optional list of source objects (dicts) used for the response.
-                     Each dict should have 'type' ('memory' or 'search') and 'data'.
+            response_text: The final answer from the ReasoningAgent.
+            sources: Optional list of source objects used for the response.
+            reasoning_text: Optional string containing CoT reasoning steps.
+            show_reasoning: Boolean flag to control if reasoning text is displayed.
         """
-        formatted_response = self._to_markdown_paragraphs(response_text)
+
+        output_parts = []
+
+        if show_reasoning and reasoning_text and reasoning_text.strip() and reasoning_text != "(Reasoning integrated or not explicitly separated)":
+            output_parts.append("**Reasoning Steps:**")
+            output_parts.append(self._to_markdown_paragraphs(reasoning_text))
+            output_parts.append("\n---\n**Final Answer:**")
+
+        output_parts.append(self._to_markdown_paragraphs(response_text))
 
         if sources and len(sources) > 0:
-            citations = []
-            citations.append("\n\n---\n**Sources Considered for Context:**") # Clarified title
+            citations = ["\n\n---\n**Sources Considered for Context:**"]
             for i, source_info in enumerate(sources):
                 source_type = source_info.get('type')
                 source_data = source_info.get('data')
                 citation_detail = f"  [{i+1}] "
-
                 if source_type == 'memory' and source_data:
                     mem_id = source_data.get('neuron_id', source_data.get('id', 'N/A'))
                     mem_content_snip = str(source_data.get('content', ''))[:60] + "..."
@@ -51,7 +57,7 @@ class OutputAgent:
                 citations.append(citation_detail)
 
             if len(citations) > 1: # Only add if there are actual source strings + header
-                 formatted_response += "\n".join(citations)
+                 output_parts.append("\n".join(citations))
 
         print("\nAssistant:")
-        print(formatted_response)
+        print("\n".join(output_parts))
